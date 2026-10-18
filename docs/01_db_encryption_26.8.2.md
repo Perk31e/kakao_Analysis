@@ -42,8 +42,15 @@ AES-256-CBC, PBKDF2-HMAC-SHA512 256,000회, HMAC-SHA512, reserve 80B(IV 16 + HMA
 즉 복호화 경로는 `ikm → (KDF) → key store 복호 → DB별 SQLCipher key` 일 가능성이 높다.
 이 기기 데이터 디렉터리 최상위에는 ikm/key store로 보이는 파일명이 바로 보이지 않음(위치·이름 추가 확인 필요).
 
-## 4. 다음 단계 (미완)
+## 4. 다음 단계 / 진행 상황
 
-1. **정적**: `SqlCipherMigration` 및 DB 오픈 함수에서 `sqlite3_key_v2` 호출부 역추적 → 키 생성/로드 함수, key store·ikm 파일 경로, ikm의 출처(기기 고유값/DPAPI 등) 확인.
-2. **동적**: 실행 중 프로세스에서 `sqlite3_key_v2`(또는 `sqlcipher_codec_ctx_set_pass`)에 BP → 각 .edb의 키(passphrase vs raw key 여부, 길이) 캡처. `sqlcipher_cipher_ctx_key_derive` 진입 시 `kdf_iter` 값 확인.
-3. 캡처한 키로 SQLCipher 4 기본 설정에서 `PRAGMA key` → `SELECT count(*) FROM sqlite_master` 검증.
+- [x] **정적**: 키 생성 함수(`sub_141CCAC20`)와 raw-key 조립/ KDF 체인 확인 → §02.
+- [x] **동적**: 실행 중 프로세스에서 키 매니저 싱글턴(`*(void**)0x142E42068`) 구조 확인 — DB별
+  32B 솔트 맵 + inline 시크릿(`ctx+0x68` 등) + KDF 체인(`sub_141CCB9A0`)을 런타임으로 확정 → **§04**.
+  raw-key 스킴(`x'<64hex>'`)이 런타임에서 확인됨.
+- [ ] **복호화 검증(미완)**: 최종 raw key 1건을 라이브 포착해야 확정. KDF가 `ctx+0xE0`가 가리키는
+  버퍼를 입력으로 써서 현재 포착분만으로는 오프라인 재현 불가(§04 §5~§6). 검증 도구는
+  `tools/kakao_edb_verify.py` (page1 AES 헤더 + HMAC-SHA512 교차검증, sqlcipher 빌드 불필요).
+
+> 주의: 이 함수에 대한 in-process 호출(디버거로 rip 조작)은 선두 SRW 락/스택 쿠키 때문에 프로세스가
+> 죽는다. 라이브 포착은 **BP+메모리 읽기(관찰)만** 사용할 것(§04 §6).
