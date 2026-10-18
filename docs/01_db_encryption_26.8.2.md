@@ -17,7 +17,8 @@
 
 → 파일 포맷은 **표준 SQLCipher 4** 레이아웃과 일치한다. SQLCipher 4 기본값이라면:
 AES-256-CBC, PBKDF2-HMAC-SHA512 256,000회, HMAC-SHA512, reserve 80B(IV 16 + HMAC 64), page 4096, plaintext header 0.
-(KakaoTalk이 `PRAGMA kdf_iter`/`cipher_*`로 기본값을 바꾸는지, 또는 raw key(`x'...'`)를 써서 KDF를 우회하는지는 **아직 미확인** — §4)
+(확인됨: KakaoTalk은 DB별 **32바이트 raw key**를 `PRAGMA key = "x'<64hex>'"`로 사용 — KDF 우회. 기본
+SQLCipher4 암호 파라미터와 일치하며 page‑1 복호화로 검증됨 — §4, §04 §8.)
 
 ## 2. 정적 분석 근거
 
@@ -48,9 +49,12 @@ AES-256-CBC, PBKDF2-HMAC-SHA512 256,000회, HMAC-SHA512, reserve 80B(IV 16 + HMA
 - [x] **동적**: 실행 중 프로세스에서 키 매니저 싱글턴(`*(void**)0x142E42068`) 구조 확인 — DB별
   32B 솔트 맵 + inline 시크릿(`ctx+0x68` 등) + KDF 체인(`sub_141CCB9A0`)을 런타임으로 확정 → **§04**.
   raw-key 스킴(`x'<64hex>'`)이 런타임에서 확인됨.
-- [ ] **복호화 검증(미완)**: 최종 raw key 1건을 라이브 포착해야 확정. KDF가 `ctx+0xE0`가 가리키는
-  버퍼를 입력으로 써서 현재 포착분만으로는 오프라인 재현 불가(§04 §5~§6). 검증 도구는
-  `tools/kakao_edb_verify.py` (page1 AES 헤더 + HMAC-SHA512 교차검증, sqlcipher 빌드 불필요).
+- [x] **복호화 검증(완료)**: raw key를 **외부 메모리 스캔**으로 확보해 복호화 확정 → **§04 §8**.
+  실행 중 프로세스에서 SQLCipher keyspec `x'<키><솔트>'`를 `ReadProcessMemory`로 수집(디버거 불필요,
+  anti-debug 미트리거), `.edb` 첫 16B 솔트로 매칭. 27개 DB page‑1 헤더 통과, `emoticon.edb` 전체
+  복호화→`integrity_check=ok`+스키마 21개 확인. 도구: `tools/kakao_keyspec_scan.py`,
+  `tools/kakao_edb_decrypt.py`, `tools/kakao_edb_verify.py`.
 
-> 주의: 이 함수에 대한 in-process 호출(디버거로 rip 조작)은 선두 SRW 락/스택 쿠키 때문에 프로세스가
-> 죽는다. 라이브 포착은 **BP+메모리 읽기(관찰)만** 사용할 것(§04 §6).
+> 경로 요약: KDF 코어는 **Themida VM 가상화**로 정적 복원 불가, 라이브 디버깅은 **Themida anti-debug**
+> (직접 syscall로 ScyllaHide 유저모드 우회)로 차단됨. 그래서 KDF 재현/BP 포착이 아니라 SQLCipher가
+> 메모리에 보관하는 **결과 keyspec을 외부에서 읽는** 방식으로 복호화를 완료함(§04 §6, §8).
