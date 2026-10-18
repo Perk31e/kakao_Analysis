@@ -83,3 +83,11 @@ rax3 = sub_141CCBF30(&out2, rdx=node+0x30(salt), r8=rax2, r9=ctx+0xE0)  // 솔�
 
 > 주의: 함수 중간에서 rip을 되돌리는 in-process 호출은 선두 SRW 락 미해제 + 스택 쿠키(`__fastfail`)로
 > 프로세스가 죽는다. **관찰(BP+읽기)만** 할 것.
+
+## 7. 도구 메모
+
+- **REA/Ghidra 백엔드는 이 88MB 덤프에서 전부 타임아웃**(string search, batch_decompile 모두
+  `provider_timeout`). 정적 디컴파일은 기존 **IDA `.i64`**(`KakaoTalk_dump_SCY.exe.i64`)를 쓸 것.
+- `ctx+0xE0`(KDF 입력)·`sub_141CCB9A0/CCC710/CCBF30`의 정확한 알고리즘(HKDF vs HMAC, OpenSSL
+  `EVP_KDF`/`PKCS5_PBKDF2` 중 무엇인지)은 IDA에서 확인 후 보강 필요. 다만 이는 §6 라이브 키 포착으로
+  복호화를 확정하는 데 **필수는 아님**(최종 `x'<64hex>'`만 있으면 됨).
