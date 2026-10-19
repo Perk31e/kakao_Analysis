@@ -1,0 +1,8 @@
+users/
+chat_data/
+*.edb*
+*.dat
+# decrypted outputs / recovered key material — never commit
+*.sqlite
+keys.txt
+*.keys

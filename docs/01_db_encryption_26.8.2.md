@@ -17,7 +17,8 @@
 
 → 파일 포맷은 **표준 SQLCipher 4** 레이아웃과 일치한다. SQLCipher 4 기본값이라면:
 AES-256-CBC, PBKDF2-HMAC-SHA512 256,000회, HMAC-SHA512, reserve 80B(IV 16 + HMAC 64), page 4096, plaintext header 0.
-(KakaoTalk이 `PRAGMA kdf_iter`/`cipher_*`로 기본값을 바꾸는지, 또는 raw key(`x'...'`)를 써서 KDF를 우회하는지는 **아직 미확인** — §4)
+(확인됨: KakaoTalk은 DB별 **32바이트 raw key**를 `PRAGMA key = "x'<64hex>'"`로 사용 — KDF 우회. 기본
+SQLCipher4 암호 파라미터와 일치하며 page‑1 복호화로 검증됨 — §4, §04 §8.)
 
 ## 2. 정적 분석 근거
 
@@ -42,8 +43,18 @@ AES-256-CBC, PBKDF2-HMAC-SHA512 256,000회, HMAC-SHA512, reserve 80B(IV 16 + HMA
 즉 복호화 경로는 `ikm → (KDF) → key store 복호 → DB별 SQLCipher key` 일 가능성이 높다.
 이 기기 데이터 디렉터리 최상위에는 ikm/key store로 보이는 파일명이 바로 보이지 않음(위치·이름 추가 확인 필요).
 
-## 4. 다음 단계 (미완)
+## 4. 다음 단계 / 진행 상황
 
-1. **정적**: `SqlCipherMigration` 및 DB 오픈 함수에서 `sqlite3_key_v2` 호출부 역추적 → 키 생성/로드 함수, key store·ikm 파일 경로, ikm의 출처(기기 고유값/DPAPI 등) 확인.
-2. **동적**: 실행 중 프로세스에서 `sqlite3_key_v2`(또는 `sqlcipher_codec_ctx_set_pass`)에 BP → 각 .edb의 키(passphrase vs raw key 여부, 길이) 캡처. `sqlcipher_cipher_ctx_key_derive` 진입 시 `kdf_iter` 값 확인.
-3. 캡처한 키로 SQLCipher 4 기본 설정에서 `PRAGMA key` → `SELECT count(*) FROM sqlite_master` 검증.
+- [x] **정적**: 키 생성 함수(`sub_141CCAC20`)와 raw-key 조립/ KDF 체인 확인 → §02.
+- [x] **동적**: 실행 중 프로세스에서 키 매니저 싱글턴(`*(void**)0x142E42068`) 구조 확인 — DB별
+  32B 솔트 맵 + inline 시크릿(`ctx+0x68` 등) + KDF 체인(`sub_141CCB9A0`)을 런타임으로 확정 → **§04**.
+  raw-key 스킴(`x'<64hex>'`)이 런타임에서 확인됨.
+- [x] **복호화 검증(완료)**: raw key를 **외부 메모리 스캔**으로 확보해 복호화 확정 → **§04 §8**.
+  실행 중 프로세스에서 SQLCipher keyspec `x'<키><솔트>'`를 `ReadProcessMemory`로 수집(디버거 불필요,
+  anti-debug 미트리거), `.edb` 첫 16B 솔트로 매칭. 27개 DB page‑1 헤더 통과, `emoticon.edb` 전체
+  복호화→`integrity_check=ok`+스키마 21개 확인. 도구: `tools/kakao_keyspec_scan.py`,
+  `tools/kakao_edb_decrypt.py`, `tools/kakao_edb_verify.py`.
+
+> 경로 요약: KDF 코어는 **Themida VM 가상화**로 정적 복원 불가, 라이브 디버깅은 **Themida anti-debug**
+> (직접 syscall로 ScyllaHide 유저모드 우회)로 차단됨. 그래서 KDF 재현/BP 포착이 아니라 SQLCipher가
+> 메모리에 보관하는 **결과 keyspec을 외부에서 읽는** 방식으로 복호화를 완료함(§04 §6, §8).
