@@ -3,6 +3,12 @@
 분석 대상: `KakaoTalk_dump_SCY.exe` (Themida 언팩 덤프, IDA/REA). 이미지 base `0x140000000`.
 주의: 본체는 Themida로 보호됨(`.themida`/`.boot` 섹션). 모든 주소는 덤프 기준.
 
+> 🔄 **갱신(2026-10-19):** 이 문서의 정적 추정은 이후 동적 분석으로 상당 부분 확정/정정됐다.
+> 핵심: `sub_141CCB9A0`에 보이던 `"sha256"` 파라미터는 맞지만 **KDF 본체는 Themida VM으로 가상화**되어
+> 정적 복원 불가. `sub_141CCC710`이 모으는 블록 중 `ctx+0xE0`는 **비밀이 아니라 OpenSSL 컨텍스트
+> 핸들**이다. 최종적으로 KDF 재현 대신 SQLCipher가 메모리에 남기는 **keyspec을 직접 포착**해 복호화를
+> 검증 완료했다. 상세·정정은 `docs/04`(런타임)과 `re/pseudo/sub_141CCAC20_key_assembly.md` 참조.
+
 ## 핵심 결론
 
 KakaoTalk은 각 .edb를 **DB별 raw 256-bit 키**로 연다. 키 유도 흐름:
@@ -32,14 +38,20 @@ ATTACH DATABASE ? AS <db> KEY x'<64 hex>'      (SQLCipher raw key)
 문자열 오프셋(파일): `"ATTACH DATABASE ? AS newDb KEY ?"`=0x29d89f8, `"SELECT sqlcipher_export('newDb')"`=0x29d8b18,
 `"Failed to generate new key for {}"`=0x29d89a8, `"Failed to set legacy key for {}"`=0x29d8980.
 
-## 아직 확정 못한 것 (동적 분석 필요)
+## 정적 미확정 항목 → 동적 분석 결과 (해결 상태)
 
-1. **KDF 정확한 종류**: 파라미터가 (알고리즘명="sha256", 비밀, salt 32B, 출력 32B)이고 반복횟수가 정적으로 안 보임
-   → PBKDF2가 아니라 **HKDF 또는 keyed-hash(HMAC)** 가능성. x64dbg로 `sub_141273EA0` 진입 시 실제 OpenSSL 호출(`PKCS5_PBKDF2_HMAC` vs `EVP_PKEY_derive`/HKDF)로 확정 필요.
-2. **비밀 입력(ikm)의 출처**: `sub_141CCC710`에 모이는 `a1+72/104/136` 블록이 어디서 채워지는지 — 기기 고유값/DPAPI/상수 중 무엇인지. 이게 복호화 가능성의 핵심.
-3. **salt의 저장 위치**: DB별 32바이트 salt가 key store 파일에 있는지, DB 헤더(첫 16B)와 어떤 관계인지.
+1. **KDF 정확한 종류** — ❌ **복원 불가로 확정**. `sub_141CCB9A0`은 32B 출력 버퍼를 잡은 뒤
+   `jmp 0x14444f323`로 **Themida VM(0x144xxxxxx)** 에 진입한다. 알고리즘(HKDF/HMAC/PBKDF2)을 정적으로
+   읽을 수 없음. → 복호화는 KDF 재현이 아니라 결과 keyspec 포착으로 달성(`docs/04` §8).
+2. **비밀 입력(ikm)의 출처** — ✅ 런타임 확정. 키 매니저 싱글턴 `*(void**)0x142E42068`의
+   `ctx+0x68`(SECRET_A, 32B)·`ctx+0x120`(32B)·라벨 `ctx+0x100`("v2:")가 입력. `ctx+0x48/0x68/0x88`
+   중 `ctx+0xE0`은 **OpenSSL 컨텍스트 핸들(비밀 아님)**. 값은 `mss.dat` 유래로 **재시작 불변**(검증됨).
+3. **salt 저장 위치** — ✅ 확정. DB별 32B salt는 **키 매니저 맵의 노드 `node+0x30`** 에 상주.
+   이는 SQLCipher 파일 헤더의 16B kdf_salt와 **다른 값**(파일 salt는 HMAC 키 유도용).
 
-## 다음 단계
+## 최종 경로 (요약)
 
-- 동적: 실행 중 KakaoTalk에 `sqlite3_key_v2` / `sub_141CCB9A0` BP → DB별 32바이트 키와 salt, KDF 입력 캡처.
-- 캡처한 raw key로 `PRAGMA key="x'...'"` + SQLCipher4 기본값 복호화 검증.
+- 정적: 키 조립 함수 `sub_141CCAC20` 완전 해독(`re/pseudo/sub_141CCAC20_key_assembly.md`).
+  단 KDF 본체는 Themida VM으로 막힘.
+- 복호화: 실행 중 프로세스 메모리에서 SQLCipher **keyspec `x'<키><솔트>'` 외부 스캔** → 27개 DB
+  page‑1 검증 + `emoticon.edb` 전체 복호화(`integrity_check=ok`). → `docs/04` §8, `README.md`.

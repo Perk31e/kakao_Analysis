@@ -86,12 +86,26 @@ rax3 = sub_141CCBF30(&out2, rdx=node+0x30(salt), r8=rax2, r9=ctx+0xE0)  // 솔�
 
 ## 6. 라이브 BP 포착 — 시도했으나 Themida anti-debug로 차단됨 (폐기)
 
-> ⛔ **이 경로는 실패.** 2026-10-19 재시도 결과: x64dbg로 `KakaoTalk.exe`를 OEP까지 끌고 가려
-> ScyllaHide(프로파일 "Themida x86/x64", 모든 PEB/NtQuery* 훅 + NtGetContextThread/NtSetContextThread
-> 추가)를 적용했으나, fresh-load 시 프로세스가 "Themida" 스플래시에서 **CPU 고정·완전 정지**하고
-> x64dbg가 **브레이크인조차 못 함**. BP를 전혀 안 걸어도 동일 → 원인은 BP가 아니라 Themida의
-> anti-debug(최신 Themida는 **직접 syscall**로 ntdll 훅을 우회하므로 유저모드 ScyllaHide로는 돌파 불가).
+두 가지 라이브 디버깅 접근을 검토했다. **둘 다 목표는 같다**: 실행 중 `sub_141CCAC20`에 BP를 걸고,
+DB 오픈 시 반환되는 `x'<64hex>'` 문자열(최종 키)을 관찰(StepOut 후 `[rdx]` 읽기)하는 것.
+
+| | **Plan A — 기존 보호 세션 재사용** | **Plan B — x64dbg로 콜드 로드(실제 수행)** |
+|---|---|---|
+| 방식 | 이미 Themida를 통과해 **안정 동작 중인 ScyllaHide 세션**(예: 이전에 됐던 PID 11912)을 사용자가 띄워주면, 거기에 BP만 걸어 **관찰** | 내가 x64dbg로 `KakaoTalk.exe`를 **EP부터 로드**, Themida 언패킹을 OEP까지 끌고 가며 ScyllaHide로 anti-debug를 무력화한 뒤 BP |
+| 전제 | "그때 됐던" 보호 세션을 **재현**할 수 있어야 함(사용자 수작업 의존) | 콜드 스타트부터 Themida anti-debug를 **내가 돌파**해야 함 |
+| 프로세스 위험 | 낮음(이미 떠 있는 프로세스를 관찰만) | 높음(실패 시 앱 정지/재시작) |
+| 결과 | 미시도(재현 보장 불가로 B 선택) | **실패** ↓ |
+
+> ⛔ **Plan B 실패.** 2026-10-19 수행 결과: ScyllaHide(프로파일 "Themida x86/x64", 모든 PEB/NtQuery*
+> 훅 + `NtGetContextThread`/`NtSetContextThread` 추가)를 적용하고 HW BP를 `0x141CCAC20`에 건 뒤 run →
+> 프로세스가 "Themida" 스플래시에서 **CPU 고정·완전 정지**, x64dbg가 **브레이크인(pause)조차 못 함**.
+> **BP를 전혀 안 걸어도 동일** → 원인은 내 BP가 아니라 Themida anti-debug. 최신 Themida는 **직접
+> syscall**로 ntdll 훅을 우회하므로 유저모드 ScyllaHide로는 콜드 스타트 돌파 불가.
 > 커널 드라이버(TitanHide 등) 없이는 라이브 디버깅 불가로 판단. → **§8 외부 메모리 방식으로 완료.**
+>
+> 두 플랜의 본질적 차이: **A는 "이미 돌파된 세션을 빌려 관찰", B는 "돌파를 직접 수행"**. B가 막힌 벽
+> (콜드 스타트 anti-debug)은 A라면 애초에 마주치지 않지만, A는 그 돌파된 세션을 **재현할 방법이 없어서**
+> 선택하지 못했다. 결국 둘 다 디버거 기반이라 **§8의 디버거-불요 방식**이 더 견고한 해법이었다.
 
 (참고) 원래 계획했던 라이브 포착 레시피 — 커널 anti-anti-debug가 갖춰진 환경에서만 유효:
 1. ScyllaHide 적용된 x64dbg 세션에서 `sub_141CCAC20`(0x141CCAC20) 진입 BP.
